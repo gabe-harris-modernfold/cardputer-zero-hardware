@@ -1,0 +1,23 @@
+[project]
+name = "cardputer-zero-hardware"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "build123d>=0.13.0",
+    "matplotlib>=3.11.2",
+    "networkx>=3.7",
+    "numpy>=2.5.4",
+    "pillow>=13.0.0",
+    "scipy>=1.18.1",
+    "trimesh>=5.2.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "cardputer_zero"
+
+[project.scripts]
+cz-build = "cardputer_zero.build:main"

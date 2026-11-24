@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cardputer Zero model</title>
+<style>
+  :root { --bg: #f3f4f6; --panel: #ffffff; --ink: #1f2937; --muted: #6b7280; --line: #d1d5db; --accent: #2563eb; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 system-ui, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 232px; padding: 12px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  h1 { font-size: 14px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin-bottom: 10px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 10px; }
+  legend { padding: 0; margin-bottom: 4px; color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .05em; }
+  label { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--line); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  button { font: inherit; padding: 4px 0; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0;
+    font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); } dd { margin: 0; text-align: right; }
+  #status { color: var(--muted); }
+  #status.error { color: #b91c1c; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="panel">
+  <h1>Cardputer Zero</h1>
+  <div class="sub">Official housing and keep-out model</div>
+  <fieldset><legend>Parts</legend><div id="parts"></div>
+    <label><input type="checkbox" id="edges" checked> Edge lines</label>
+    <label><input type="checkbox" id="axes" checked> Axes (X red, Y green, Z blue)</label>
+  </fieldset>
+  <fieldset><legend>Explode</legend>
+    <input type="range" id="explode" min="0" max="40" step="0.5" value="0">
+  </fieldset>
+  <fieldset><legend>View</legend>
+    <div class="views">
+      <button data-view="front">Front</button><button data-view="back">Back</button>
+      <button data-view="top">Top</button><button data-view="bottom">Bottom</button>
+      <button data-view="left">Left</button><button data-view="right">Right</button>
+      <button data-view="iso">Iso</button><button data-view="iso_back">Iso B</button>
+    </div>
+  </fieldset>
+  <fieldset><legend>Housing bounds (mm)</legend><dl id="dims"></dl></fieldset>
+  <div id="status">Loading model…</div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const MODEL_URL = '../out/cardputer_zero.glb';
+// Same camera presets as cardputer_zero/render.py: [camera direction, up].
+const VIEWS = {
+  front: [[0, 0, 1], [0, 1, 0]], back: [[0, 0, -1], [0, 1, 0]],
+  top: [[0, 1, 0], [0, 0, -1]], bottom: [[0, -1, 0], [0, 0, 1]],
+  left: [[-1, 0, 0], [0, 1, 0]], right: [[1, 0, 0], [0, 1, 0]],
+  iso: [[-0.55, -0.75, 0.9], [0, 0, 1]], iso_back: [[0.55, 0.75, -0.9], [0, 0, -1]],
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf3f4f6);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8892a0, 1.0));
+const key = new THREE.DirectionalLight(0xffffff, 1.1);
+scene.add(key);
+
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 1000);
+const controls = new OrbitControls(camera, renderer.domElement);
+const axes = new THREE.AxesHelper(20);
+axes.position.set(-42, -27, 0);
+scene.add(axes);
+
+const center = new THREE.Vector3(0, 0, 11.55);
+const parts = {};
+const edgeLines = [];
+let span = 100;
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight, aspect = w / h;
+  renderer.setSize(w, h);
+  camera.left = -span * aspect / 2; camera.right = span * aspect / 2;
+  camera.top = span / 2; camera.bottom = -span / 2;
+  camera.updateProjectionMatrix();
+}
+
+function setView(name) {
+  const [dir, up] = VIEWS[name];
+  camera.up.set(...up);
+  camera.position.copy(center).add(new THREE.Vector3(...dir).normalize().multiplyScalar(300));
+  controls.target.copy(center);
+  camera.zoom = 1;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function showBounds() {
+  const box = new THREE.Box3();
+  for (const mesh of Object.values(parts)) if (mesh.visible) box.expandByObject(mesh);
+  const dl = document.getElementById('dims');
+  if (box.isEmpty()) { dl.innerHTML = ''; return; }
+  const size = box.getSize(new THREE.Vector3());
+  dl.innerHTML = ['X', 'Y', 'Z'].map((axis, i) =>
+    `<dt>${axis}</dt><dd>${box.min.getComponent(i).toFixed(2)} … ${box.max.getComponent(i).toFixed(2)}` +
+    ` &nbsp;(${size.getComponent(i).toFixed(2)})</dd>`).join('');
+}
+
+// Node names are "<group>__<name>": housing parts get a checkbox each, the
+// keep-out body and keyboard zone one each, and all access volumes share one.
+const GROUPS = {
+  keepout: { translucent: true, each: true, label: (n) => 'Keep-out: ' + n },
+  access: { translucent: true, each: false, label: () => 'Access volumes' },
+  housing: { translucent: false, each: true, label: (n) => n },
+  pack: { translucent: false, each: true, on: true, label: () => 'Sensor pack' },
+};
+const packNodes = [];
+
+function addToggle(list, text, color, meshes, checked) {
+  const row = document.createElement('label');
+  row.innerHTML = `<input type="checkbox"${checked ? ' checked' : ''}><span class="swatch" style="background:${color}"></span>${text}`;
+  row.querySelector('input').addEventListener('change', (e) => {
+    meshes.forEach((m) => { m.visible = e.target.checked; });
+    showBounds();
+  });
+  meshes.forEach((m) => { m.visible = checked; });
+  list.appendChild(row);
+}
+
+new GLTFLoader().load(MODEL_URL, (gltf) => {
+  const list = document.getElementById('parts');
+  const access = [];
+  const rows = [];
+  gltf.scene.traverse((node) => {
+    if (!node.isMesh) return;
+    const [group, name] = (node.name || node.parent.name).split('__');
+    const spec = GROUPS[group] || GROUPS.housing;
+    node.material.flatShading = true;
+    node.material.side = THREE.DoubleSide;
+    if (spec.translucent) {
+      node.material.transparent = true;
+      node.material.opacity = 0.28;
+      node.material.depthWrite = false;
+      node.renderOrder = 1;
+    }
+    node.material.needsUpdate = true;
+    const lines = new THREE.LineSegments(
+      new THREE.EdgesGeometry(node.geometry, 25),
+      new THREE.LineBasicMaterial({ color: spec.translucent ? node.material.color : 0x111827 }));
+    node.add(lines);
+    if (!spec.translucent) edgeLines.push(lines);
+    const color = '#' + node.material.color.getHexString();
+    if (group === 'housing') { parts[name] = node; rows.unshift([spec.label(name), color, [node], true]); }
+    else if (spec.each) rows.push([spec.label(name), color, [node], Boolean(spec.on)]);
+    else access.push(node);
+    if (group === 'pack') packNodes.push(node);
+  });
+  rows.sort((a, b) => Number(b[3]) - Number(a[3]));
+  rows.forEach((r) => addToggle(list, ...r));
+  if (access.length) addToggle(list, `Access volumes (${access.length})`, '#dc2626', access, false);
+  scene.add(gltf.scene);
+  const size = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3());
+  span = size.length() * 1.05;
+  resize();
+  setView(packNodes.length ? 'iso_back' : 'iso');
+  showBounds();
+  document.getElementById('status').textContent = 'Drag to orbit, scroll to zoom, right-drag to pan.';
+}, undefined, () => {
+  const status = document.getElementById('status');
+  status.className = 'error';
+  status.textContent = 'Could not load out/cardputer_zero.glb. Run "uv run cz-build" first.';
+});
+
+document.getElementById('explode').addEventListener('input', (e) => {
+  if (parts.front_shell) parts.front_shell.position.z = Number(e.target.value);
+  packNodes.forEach((n) => { n.position.z = -Number(e.target.value); });
+  showBounds();
+});
+document.getElementById('edges').addEventListener('change', (e) => edgeLines.forEach((l) => { l.visible = e.target.checked; }));
+document.getElementById('axes').addEventListener('change', (e) => { axes.visible = e.target.checked; });
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+window.addEventListener('resize', resize);
+
+resize();
+renderer.setAnimationLoop(() => {
+  controls.update();
+  key.position.copy(camera.position).add(new THREE.Vector3(-60, 80, 40).applyQuaternion(camera.quaternion));
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
